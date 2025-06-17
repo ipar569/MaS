@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
 import 'dart:math';
+import 'package:docx_template/docx_template.dart';
 
 class DataMappingScreen extends StatefulWidget {
   final String templatePath;
@@ -121,36 +122,48 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
   }
 
   void _autoMapFields() {
-    if (templateFields.isEmpty || dataColumns.isEmpty) return;
-
+    print('=== Auto Mapping Debug ===');
+    print('Template fields: $templateFields');
+    print('Data columns: $dataColumns');
+    
     // Create a map of lowercase field names to their original case
-    final lowercaseFields = templateFields.fold<Map<String, String>>({}, (map, field) {
-      map[field.toLowerCase()] = field;
-      return map;
-    });
-
-    // Try to match columns to fields
+    final fieldMap = {
+      for (var field in templateFields)
+        field.toLowerCase(): field
+    };
+    
+    print('Field map: $fieldMap');
+    
+    // Try to match data columns to template fields
     for (final column in dataColumns) {
-      final lowercaseColumn = column.toLowerCase();
+      print('\nTrying to match column: $column');
       
       // Try exact match first
-      if (lowercaseFields.containsKey(lowercaseColumn)) {
-        fieldMappings[lowercaseFields[lowercaseColumn]!] = column;
+      if (fieldMap.containsKey(column.toLowerCase())) {
+        final field = fieldMap[column.toLowerCase()]!;
+        print('Found exact match for $column -> $field');
+        fieldMappings[field] = column;
         continue;
       }
-
-      // Try removing spaces and special characters
-      final normalizedColumn = lowercaseColumn.replaceAll(RegExp(r'[^a-z0-9]'), '');
-      for (final field in lowercaseFields.keys) {
-        final normalizedField = field.replaceAll(RegExp(r'[^a-z0-9]'), '');
+      
+      // Try normalized match (remove spaces and special characters)
+      final normalizedColumn = column.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+      print('Normalized column: $normalizedColumn');
+      
+      for (final field in templateFields) {
+        final normalizedField = field.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+        print('Comparing with normalized field: $normalizedField');
+        
         if (normalizedColumn == normalizedField) {
-          fieldMappings[lowercaseFields[field]!] = column;
+          print('Found normalized match for $column -> $field');
+          fieldMappings[field] = column;
           break;
         }
       }
     }
-
-    print('Auto-mapped fields: $fieldMappings');
+    
+    print('Final field mappings: $fieldMappings');
+    setState(() {});
   }
 
   Future<void> _pickDataFile() async {
@@ -179,71 +192,86 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
     if (widget.templatePath == null) return;
 
     try {
+      print('=== Template Field Extraction Debug ===');
+      print('Template path: ${widget.templatePath}');
+      print('Selected pattern: $pattern');
+      
+      // Read the template file
       final bytes = await File(widget.templatePath!).readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
       final docFile = archive.files.firstWhere((f) => f.name == 'word/document.xml');
       final xmlString = utf8.decode(docFile.content as List<int>);
       
-      print('=== Template Field Extraction Debug ===');
-      print('Template path: ${widget.templatePath}');
-      print('Selected pattern: $pattern');
+      print('XML content length: ${xmlString.length}');
+      print('First 500 chars of XML: ${xmlString.substring(0, min(500, xmlString.length))}');
       
-      // Parse the XML document
-      final document = XmlDocument.parse(xmlString);
-      final body = document.findAllElements('w:body').first;
-      final text = body.text;
+      List<String> fields = [];
       
-      print('Document text length: ${text.length}');
-      print('First 500 chars of text: ${text.substring(0, min(500, text.length))}');
-      
-      // Get the correct pattern based on the selected pattern
-      String searchPattern;
-      switch (pattern) {
-        case '<<>>':
-          searchPattern = r'<<([^>]+)>>';
-          break;
-        case '{{}}':
-          searchPattern = r'\{\{([^}]+)\}\}';
-          break;
-        case '[]':
-          searchPattern = r'\[([^\]]+)\]';
-          break;
-        case '()':
-          searchPattern = r'\(([^)]+)\)';
-          break;
-        default:
-          searchPattern = r'\{\{([^}]+)\}\}';
+      if (pattern == '<<>>') {
+        print('Processing double angle pattern...');
+        // Try both raw and HTML-encoded patterns
+        final patterns = [
+          ['<<', '>>'],  // Raw pattern
+          ['&lt;&lt;', '&gt;&gt;'],  // HTML encoded
+        ];
+        
+        for (final patternPair in patterns) {
+          final startMarker = patternPair[0];
+          final endMarker = patternPair[1];
+          print('Trying pattern with markers: $startMarker and $endMarker');
+          
+          int startIndex = 0;
+          while (true) {
+            startIndex = xmlString.indexOf(startMarker, startIndex);
+            if (startIndex == -1) break;
+            
+            final endIndex = xmlString.indexOf(endMarker, startIndex);
+            if (endIndex == -1) break;
+            
+            final field = xmlString.substring(startIndex + startMarker.length, endIndex);
+            print('Found field: $startMarker$field$endMarker');
+            fields.add(field);
+            
+            startIndex = endIndex + endMarker.length;
+          }
+        }
+      } else {
+        // Get the correct pattern based on the selected pattern
+        String searchPattern;
+        switch (pattern) {
+          case '{{}}':
+            searchPattern = r'\{\{([^}]+)\}\}';
+            break;
+          case '[]':
+            searchPattern = r'\[([^\]]+)\]';
+            break;
+          case '()':
+            searchPattern = r'\(([^)]+)\)';
+            break;
+          default:
+            searchPattern = r'\{\{([^}]+)\}\}';
+        }
+        
+        print('Using search pattern: $searchPattern');
+        final regex = RegExp(searchPattern);
+        final matches = regex.allMatches(xmlString);
+        
+        fields = matches
+            .map((match) => match.group(1) ?? '')
+            .where((field) => field.isNotEmpty)
+            .toList();
       }
       
-      print('Using search pattern: $searchPattern');
-      final regex = RegExp(searchPattern);
-      final matches = regex.allMatches(text);
-      print('Number of matches found: ${matches.length}');
+      print('Extracted fields: $fields');
       
-      // Log each match in detail
-      matches.forEach((match) {
-        print('Found field: ${match.group(0)}');
-        print('Field name: ${match.group(1)}');
-        print('Position: ${match.start} to ${match.end}');
-      });
-      
-      // Extract unique field names
-      final newFields = matches
-          .map((match) => match.group(1) ?? '')
-          .where((field) => field.isNotEmpty)
-          .toSet()
-          .toList();
-          
-      print('Extracted fields: $newFields');
-      
-      if (newFields.isEmpty) {
+      if (fields.isEmpty) {
         print('WARNING: No fields found in template!');
         print('Document text preview (first 2000 chars):');
-        print(text.substring(0, min(2000, text.length)));
+        print(xmlString.substring(0, min(2000, xmlString.length)));
       }
       
       setState(() {
-        templateFields = newFields;
+        templateFields = fields;
       });
     } catch (e, stackTrace) {
       print('Error extracting template fields: $e');
@@ -301,133 +329,153 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
   }
 
   Future<void> _generateFiles() async {
-    if (templateFields.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No template fields detected')),
-      );
-      return;
-    }
-
-    if (dataColumns.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No data columns available')),
-      );
-      return;
-    }
-
-    // Validate field mappings
-    final unmappedFields = templateFields.where((field) => 
-      fieldMappings[field] == null || fieldMappings[field]!.isEmpty
-    ).toList();
-
-    if (unmappedFields.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Please map all fields: ${unmappedFields.join(", ")}'),
-        ),
-      );
-      return;
-    }
+    if (widget.templatePath == null) return;
 
     setState(() {
       isGenerating = true;
-      currentProgress = 0;
       generationError = null;
     });
 
     try {
-      // Read the template file
-      final templateBytes = await File(widget.templatePath!).readAsBytes();
-      final archive = ZipDecoder().decodeBytes(templateBytes);
-      
-      // Calculate total files to generate
-      totalFiles = dataRows.length;
+      print('=== File Generation Debug ===');
+      print('Template path: ${widget.templatePath}');
+      print('Number of data rows: ${dataRows.length}');
+      print('Field mappings: $fieldMappings');
+      print('Data columns: $dataColumns');
       
       // Create output directory if it doesn't exist
-      final outputDir = Directory(outputDirectory ?? '');
-      if (!await outputDir.exists()) {
-        await outputDir.create(recursive: true);
-      }
-
+      final outputDir = outputDirectory ?? 'generated_documents';
+      await Directory(outputDir).create(recursive: true);
+      
+      // Read the template file
+      final bytes = await File(widget.templatePath!).readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      
+      // Generate a file for each row
       for (var i = 0; i < dataRows.length; i++) {
         final row = dataRows[i];
-        // Find document.xml
-        final docFile = archive.files.firstWhere((f) => f.name == 'word/document.xml');
-        final xmlString = utf8.decode(docFile.content as List<int>);
-        var newXmlString = xmlString;
+        print('\nProcessing row $i:');
+        print('Row data: $row');
         
-        // Replace placeholders
-        for (final field in templateFields) {
-          final column = fieldMappings[field]!;
-          final value = row[column]?.toString() ?? '';
-          String placeholder;
-          switch (pattern) {
-            case '<<>>':
-              placeholder = '<<$field>>';
-              break;
-            case '{{}}':
-              placeholder = '{{$field}}';
-              break;
-            case '[]':
-              placeholder = '[$field]';
-              break;
-            case '()':
-              placeholder = '($field)';
-              break;
-            default:
-              placeholder = '{{$field}}';
-          }
-          newXmlString = newXmlString.replaceAll(placeholder, value);
-        }
-        
-        // Create new archive
+        // Create a new document for each row
         final newArchive = Archive();
+        
+        // Copy all files from the original archive
         for (final file in archive.files) {
           if (file.name == 'word/document.xml') {
-            final contentBytes = utf8.encode(newXmlString);
-            newArchive.addFile(ArchiveFile(file.name, contentBytes.length, contentBytes));
+            // Get the XML content
+            var xmlContent = utf8.decode(file.content as List<int>);
+            print('Original XML content length: ${xmlContent.length}');
+            
+            if (pattern == '<<>>') {
+              print('Processing double angle pattern...');
+              // Process each field mapping
+              for (final entry in fieldMappings.entries) {
+                final field = entry.key;
+                final column = entry.value;
+                final value = row[column]?.toString() ?? '';
+                print('Replacing field: <<$field>> with value: $value');
+                
+                // Try both raw and HTML-encoded patterns
+                xmlContent = xmlContent
+                    .replaceAll('<<$field>>', value)
+                    .replaceAll('&lt;&lt;$field&gt;&gt;', value);
+              }
+            } else {
+              // Get the correct pattern based on the selected pattern
+              String searchPattern;
+              switch (pattern) {
+                case '{{}}':
+                  searchPattern = r'\{\{([^}]+)\}\}';
+                  break;
+                case '[]':
+                  searchPattern = r'\[([^\]]+)\]';
+                  break;
+                case '()':
+                  searchPattern = r'\(([^)]+)\)';
+                  break;
+                default:
+                  searchPattern = r'\{\{([^}]+)\}\}';
+              }
+              
+              print('Using search pattern: $searchPattern');
+              final regex = RegExp(searchPattern);
+              
+              // Find all field matches
+              final matches = regex.allMatches(xmlContent);
+              print('Found ${matches.length} field matches in template');
+              
+              // Create a map of replacements
+              final replacements = <String, String>{};
+              
+              // Process each match
+              for (final match in matches) {
+                final fieldName = match.group(1);
+                if (fieldName != null) {
+                  print('Processing field: $fieldName');
+                  final mappedColumn = fieldMappings[fieldName];
+                  if (mappedColumn != null) {
+                    final value = row[mappedColumn]?.toString() ?? '';
+                    print('Mapped to column: $mappedColumn, value: $value');
+                    
+                    // Store the replacement
+                    replacements[match.group(0)!] = value;
+                  } else {
+                    print('Warning: No mapping found for field: $fieldName');
+                  }
+                }
+              }
+              
+              // Apply all replacements
+              for (final entry in replacements.entries) {
+                print('Replacing ${entry.key} with ${entry.value}');
+                xmlContent = xmlContent.replaceAll(entry.key, entry.value);
+              }
+            }
+            
+            print('Modified XML content length: ${xmlContent.length}');
+            
+            // Add the modified document.xml
+            newArchive.addFile(ArchiveFile(
+              file.name,
+              utf8.encode(xmlContent).length,
+              utf8.encode(xmlContent),
+            ));
           } else {
-            newArchive.addFile(ArchiveFile(file.name, file.size, file.content));
+            // Copy other files as is
+            newArchive.addFile(file);
           }
         }
         
-        // Generate filename
-        final fileName = _generateFileName(i, row);
-        final outputPath = path.join(outputDirectory!, '$fileName.docx');
+        // Generate output filename
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final outputPath = '$outputDir/document_${i + 1}_$timestamp.docx';
         
-        // Save new docx
-        final outputBytes = ZipEncoder().encode(newArchive)!;
-        await File(outputPath).writeAsBytes(outputBytes);
-        
-        setState(() {
-          currentProgress = i + 1;
-        });
+        // Save the modified document
+        final outputBytes = ZipEncoder().encode(newArchive);
+        if (outputBytes != null) {
+          await File(outputPath).writeAsBytes(outputBytes);
+          print('Generated file: $outputPath');
+        }
       }
       
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Successfully generated $totalFiles files'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      setState(() {
-        generationError = e.toString();
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error generating files: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
       setState(() {
         isGenerating = false;
       });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Generated ${dataRows.length} documents in $outputDir')),
+      );
+    } catch (e, stackTrace) {
+      print('Error generating files: $e');
+      print('Stack trace: $stackTrace');
+      setState(() {
+        isGenerating = false;
+        generationError = e.toString();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error generating files: $e')),
+      );
     }
   }
 
