@@ -133,15 +133,15 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
                         Expanded(
                           child: DropdownButtonFormField<String>(
                             value: pattern,
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               labelText: 'Field Pattern',
-                              border: OutlineInputBorder(),
-                              helperText: 'Select the pattern used in your template',
+                              border: const OutlineInputBorder(),
+                              helperText: 'Example: ${_getExample(pattern)}',
                             ),
                             items: patternMap.entries.map((entry) {
                               return DropdownMenuItem(
                                 value: entry.key,
-                                child: Text(entry.value),
+                                child: Text('${entry.value} (Example: ${_getExample(entry.key)})'),
                               );
                             }).toList(),
                             onChanged: (value) {
@@ -160,54 +160,6 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
                           label: const Text('Map Data to Template'),
                         ),
                       ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Field Pattern',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: colorScheme.primary,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Choose how fields are marked in your template:',
-                      style: TextStyle(
-                        color: colorScheme.onSurface,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(
-                      value: pattern,
-                      decoration: InputDecoration(
-                        border: const OutlineInputBorder(),
-                        labelText: 'Select Pattern',
-                        helperText: 'Example: ${_getExample(pattern)}',
-                      ),
-                      items: patternMap.entries.map((entry) {
-                        return DropdownMenuItem(
-                          value: entry.key,
-                          child: Text('${entry.value} (Example: ${_getExample(entry.key)})'),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() {
-                            pattern = value;
-                          });
-                        }
-                      },
                     ),
                   ],
                 ),
