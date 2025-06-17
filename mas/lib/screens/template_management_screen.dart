@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'data_mapping_screen.dart';
 
 class TemplateManagementScreen extends StatefulWidget {
   const TemplateManagementScreen({Key? key}) : super(key: key);
@@ -98,6 +99,18 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
     }
   }
 
+  void _navigateToDataMapping(FileSystemEntity file) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DataMappingScreen(
+          templatePath: file.path,
+          templateName: path.basename(file.path),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -183,6 +196,7 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
                                     'Last modified: ${File(file.path).lastModifiedSync()}',
                                     style: TextStyle(color: colorScheme.onSurfaceVariant),
                                   ),
+                                  onTap: () => _navigateToDataMapping(file),
                                   trailing: PopupMenuButton(
                                     itemBuilder: (context) => [
                                       const PopupMenuItem(
@@ -195,7 +209,9 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
                                       ),
                                     ],
                                     onSelected: (value) async {
-                                      if (value == 'delete') {
+                                      if (value == 'generate') {
+                                        _navigateToDataMapping(file);
+                                      } else if (value == 'delete') {
                                         final confirmed = await showDialog<bool>(
                                           context: context,
                                           builder: (context) => AlertDialog(
