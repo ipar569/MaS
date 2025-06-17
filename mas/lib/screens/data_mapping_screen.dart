@@ -3,22 +3,23 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:excel/excel.dart';
-import 'dart:convert';
-import 'package:intl/intl.dart';
 import 'package:archive/archive.dart';
-import 'package:xml/xml.dart';
+import 'dart:convert';
 import 'dart:math';
 import 'package:docx_template/docx_template.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:intl/intl.dart';
 
 class DataMappingScreen extends StatefulWidget {
   final String templatePath;
   final String initialPattern;
 
   const DataMappingScreen({
-    super.key,
+    Key? key,
     required this.templatePath,
-    required this.initialPattern,
-  });
+    this.initialPattern = '',
+  }) : super(key: key);
 
   @override
   State<DataMappingScreen> createState() => _DataMappingScreenState();
@@ -68,6 +69,9 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
     pattern = widget.initialPattern.isNotEmpty ? widget.initialPattern : '<<>>';
     print('Initializing DataMappingScreen with pattern: $pattern'); // Debug log
     
+    // Initialize output directory
+    _initializeOutputDirectory();
+    
     // Extract template fields after a short delay to ensure widget is initialized
     Future.delayed(const Duration(milliseconds: 100), () {
       _extractTemplateFields();
@@ -82,6 +86,47 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
     startNumberController.dispose();
     numberPaddingController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initializeOutputDirectory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? savedDir = prefs.getString('lastOutputDirectory');
+      
+      if (savedDir == null) {
+        // Set default directory in app's documents folder
+        final appDir = await getApplicationDocumentsDirectory();
+        savedDir = '${appDir.path}/generated_documents';
+        
+        // Create the directory if it doesn't exist
+        final dir = Directory(savedDir);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        
+        await prefs.setString('lastOutputDirectory', savedDir);
+      } else {
+        // Verify the saved directory exists
+        final dir = Directory(savedDir);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+      }
+      
+      if (mounted) {
+        setState(() {
+          outputDirectory = savedDir;
+        });
+      }
+    } catch (e) {
+      print('Error initializing output directory: $e');
+      // Set a fallback directory
+      if (mounted) {
+        setState(() {
+          outputDirectory = 'generated_documents';
+        });
+      }
+    }
   }
 
   Future<void> _loadData() async {
@@ -283,11 +328,46 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
   }
 
   Future<void> _selectOutputDirectory() async {
-    final directory = await FilePicker.platform.getDirectoryPath();
-    if (directory != null) {
-      setState(() {
-        outputDirectory = directory;
-      });
+    try {
+      // Use FilePicker to select a directory
+      String? selectedDirectory = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'Select Output Directory',
+      );
+
+      if (selectedDirectory != null) {
+        print('Selected directory: $selectedDirectory'); // Debug log
+
+        // Create the directory if it doesn't exist
+        final dir = Directory(selectedDirectory);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+
+        // Save the selected directory
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('lastOutputDirectory', selectedDirectory);
+        
+        setState(() {
+          outputDirectory = selectedDirectory;
+        });
+
+        // Show confirmation
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Output directory set to: $selectedDirectory')),
+          );
+        }
+      }
+    } catch (e) {
+      print('Error selecting directory: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error selecting directory: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -793,43 +873,10 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
             ),
             const SizedBox(height: 16),
             ListTile(
+              leading: const Icon(Icons.folder),
               title: const Text('Output Directory'),
               subtitle: Text(outputDirectory ?? 'Not selected'),
-              trailing: ElevatedButton(
-                onPressed: _selectOutputDirectory,
-                child: const Text('Select'),
-              ),
             ),
-            if (outputDirectory != null) ...[
-              const Divider(),
-              const Text('Current Settings:'),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                children: [
-                  if (includeDate)
-                    Chip(label: Text('Date: ${dateFormatController.text}')),
-                  if (includeTime)
-                    const Chip(label: Text('Time')),
-                  if (customText.isNotEmpty)
-                    Chip(label: Text('Text: $customText')),
-                  if (selectedField != null)
-                    Chip(label: Text('Field: $selectedField')),
-                  if (useIncrementingNumber)
-                    Chip(
-                      label: Text(
-                        'Number: ${startNumber.toString().padLeft(numberPadding, '0')}',
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              const Text('Preview:'),
-              Text(
-                _generateFileName(0, dataRows.isNotEmpty ? dataRows[0] : {}),
-                style: const TextStyle(fontStyle: FontStyle.italic),
-              ),
-            ],
           ],
         ),
       ),
@@ -926,7 +973,39 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
             const SizedBox(height: 16),
             _buildFieldMappingSection(),
             const SizedBox(height: 16),
-            _buildOutputSettingsSection(),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Output Settings',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: _selectOutputDirectory,
+                          icon: const Icon(Icons.folder),
+                          label: const Text('Change Directory'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    ListTile(
+                      leading: const Icon(Icons.folder),
+                      title: const Text('Output Directory'),
+                      subtitle: Text(outputDirectory ?? 'Not selected'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 16),
             _buildGenerationProgress(),
             const SizedBox(height: 16),
