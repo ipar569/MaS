@@ -46,19 +46,26 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
   // File naming options
   bool includeDate = false;
   bool includeTime = false;
-  String customText = '';
-  String? selectedField;
+  List<Map<String, dynamic>> customTexts = []; // List of custom texts with IDs
+  List<Map<String, dynamic>> fieldValues = []; // List of field values with IDs
   bool useIncrementingNumber = false;
   String numberSeparator = '_';
   int startNumber = 1;
   int numberPadding = 3;
+  String dateFormat = 'yyyyMMdd';
+  String timeFormat = 'HHmmss';
+  bool useCustomSeparator = false;
+  String customSeparator = '_';
+  List<String> componentOrder = [];
 
   // Controllers for text fields
-  final TextEditingController customTextController = TextEditingController();
+  final Map<String, TextEditingController> customTextControllers = {};
   final TextEditingController dateFormatController = TextEditingController(text: 'yyyyMMdd');
-  final TextEditingController numberSeparatorController = TextEditingController(text: '-');
+  final TextEditingController timeFormatController = TextEditingController(text: 'HHmmss');
+  final TextEditingController numberSeparatorController = TextEditingController(text: '_');
   final TextEditingController startNumberController = TextEditingController(text: '1');
   final TextEditingController numberPaddingController = TextEditingController(text: '3');
+  final TextEditingController customSeparatorController = TextEditingController(text: '_');
 
   String? dataPath;
 
@@ -80,11 +87,13 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
 
   @override
   void dispose() {
-    customTextController.dispose();
+    customTextControllers.values.forEach((controller) => controller.dispose());
     dateFormatController.dispose();
+    timeFormatController.dispose();
     numberSeparatorController.dispose();
     startNumberController.dispose();
     numberPaddingController.dispose();
+    customSeparatorController.dispose();
     super.dispose();
   }
 
@@ -374,38 +383,806 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
   String _generateFileName(int index, Map<String, dynamic> row) {
     final parts = <String>[];
 
-    // Add date if enabled
-    if (includeDate) {
-      final now = DateTime.now();
-      final formatter = DateFormat(dateFormatController.text);
-      parts.add(formatter.format(now));
+    // Follow the component order
+    for (final component in componentOrder) {
+      if (component.startsWith('custom_text_')) {
+        final id = component.replaceFirst('custom_text_', '');
+        final customText = customTexts.firstWhere(
+          (ct) => ct['id'] == id,
+          orElse: () => {'text': ''},
+        );
+        if (customText['text'].isNotEmpty) {
+          parts.add(customText['text']);
+        }
+      } else if (component.startsWith('field_value_')) {
+        final id = component.replaceFirst('field_value_', '');
+        final fieldValue = fieldValues.firstWhere(
+          (fv) => fv['id'] == id,
+          orElse: () => {'field': null},
+        );
+        if (fieldValue['field'] != null && row.containsKey(fieldValue['field'])) {
+          final value = row[fieldValue['field']]?.toString() ?? '';
+          if (value.isNotEmpty) {
+            parts.add(value);
+          }
+        }
+      } else if (component == 'date' && includeDate) {
+        final now = DateTime.now();
+        final formatter = DateFormat(dateFormat);
+        parts.add(formatter.format(now));
+      } else if (component == 'time' && includeTime) {
+        final now = DateTime.now();
+        final formatter = DateFormat(timeFormat);
+        parts.add(formatter.format(now));
+      } else if (component == 'number' && useIncrementingNumber) {
+        final number = startNumber + index;
+        parts.add(number.toString().padLeft(numberPadding, '0'));
+      }
     }
 
-    // Add time if enabled
-    if (includeTime) {
-      final now = DateTime.now();
-      final formatter = DateFormat('HHmmss');
-      parts.add(formatter.format(now));
-    }
+    // Join all parts with the appropriate separator
+    final separator = useCustomSeparator ? customSeparator : numberSeparator;
+    return parts.join(separator);
+  }
 
-    // Add custom text if provided
-    if (customText.isNotEmpty) {
-      parts.add(customText);
-    }
+  void _addCustomText() {
+    final id = DateTime.now().millisecondsSinceEpoch.toString();
+    setState(() {
+      customTexts.add({
+        'id': id,
+        'text': '',
+      });
+      customTextControllers[id] = TextEditingController();
+      componentOrder.add('custom_text_$id');
+    });
+  }
 
-    // Add selected field value if any
-    if (selectedField != null && row[selectedField] != null) {
-      parts.add(row[selectedField].toString());
-    }
+  void _addFieldValue() {
+    final id = DateTime.now().millisecondsSinceEpoch.toString();
+    setState(() {
+      fieldValues.add({
+        'id': id,
+        'field': null,
+      });
+      componentOrder.add('field_value_$id');
+    });
+  }
 
-    // Add incrementing number if enabled
-    if (useIncrementingNumber) {
-      final number = (startNumber + index).toString().padLeft(numberPadding, '0');
-      parts.add(number);
-    }
+  void _removeCustomText(String id) {
+    setState(() {
+      customTexts.removeWhere((ct) => ct['id'] == id);
+      customTextControllers[id]?.dispose();
+      customTextControllers.remove(id);
+      componentOrder.remove('custom_text_$id');
+    });
+  }
 
-    // Join all parts with the separator
-    return parts.join(numberSeparator);
+  void _removeFieldValue(String id) {
+    setState(() {
+      fieldValues.removeWhere((fv) => fv['id'] == id);
+      componentOrder.remove('field_value_$id');
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Data Mapping'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Data File',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (dataPath == null)
+                      ElevatedButton.icon(
+                        onPressed: _pickDataFile,
+                        icon: const Icon(Icons.upload_file),
+                        label: const Text('Select Data File (Excel/CSV)'),
+                      )
+                    else
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ListTile(
+                            leading: const Icon(Icons.table_chart),
+                            title: Text(path.basename(dataPath!)),
+                            subtitle: Text(dataPath!),
+                          ),
+                          const SizedBox(height: 8),
+                          ElevatedButton.icon(
+                            onPressed: _pickDataFile,
+                            icon: const Icon(Icons.edit),
+                            label: const Text('Change Data File'),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildFieldMappingSection(),
+            const SizedBox(height: 16),
+            // File Naming Card
+            _buildFileNamingSection(),
+            const SizedBox(height: 16),
+            // Output Directory Card
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Output Directory',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: _selectOutputDirectory,
+                          icon: const Icon(Icons.folder),
+                          label: const Text('Change Directory'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    ListTile(
+                      leading: const Icon(Icons.folder),
+                      title: const Text('Directory'),
+                      subtitle: Text(outputDirectory ?? 'Not selected'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildGenerationProgress(),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: isGenerating ? null : _generateFiles,
+              child: Text(isGenerating ? 'Generating...' : 'Generate Files'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFieldMappingSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Field Mapping',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Row(
+                  children: [
+                    DropdownButton<String>(
+                      value: pattern,
+                      items: patternMap.entries.map((entry) {
+                        return DropdownMenuItem(
+                          value: entry.key,
+                          child: Text(entry.value),
+                        );
+                      }).toList(),
+                      onChanged: (value) async {
+                        if (value != null && value != pattern) {
+                          // Update pattern
+                          setState(() {
+                            pattern = value;
+                          });
+                          
+                          // Clear existing fields and mappings
+                          templateFields.clear();
+                          fieldMappings.clear();
+                          
+                          // Re-extract fields with new pattern
+                          await _extractTemplateFields();
+                          
+                          // Re-run auto-mapping if we have data
+                          if (dataColumns.isNotEmpty) {
+                            _autoMapFields();
+                          }
+                        }
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.refresh),
+                      onPressed: _autoMapFields,
+                      tooltip: 'Auto-map Fields',
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (templateFields.isEmpty)
+              const Center(
+                child: Text('No fields found in template'),
+              )
+            else
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: templateFields.length,
+                itemBuilder: (context, index) {
+                  final field = templateFields[index];
+                  return Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              field,
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: DropdownButton<String>(
+                              value: fieldMappings[field],
+                              isExpanded: true,
+                              hint: const Text('Select column'),
+                              items: dataColumns.map((column) {
+                                return DropdownMenuItem(
+                                  value: column,
+                                  child: Text(column),
+                                );
+                              }).toList(),
+                              onChanged: (value) {
+                                setState(() {
+                                  if (value == null) {
+                                    fieldMappings.remove(field);
+                                  } else {
+                                    fieldMappings[field] = value;
+                                  }
+                                });
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFileNamingSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'File Naming',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Component Order
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Component Order',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ReorderableListView(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      children: componentOrder.map((component) {
+                        String label;
+                        IconData icon;
+                        if (component.startsWith('custom_text_')) {
+                          final id = component.replaceFirst('custom_text_', '');
+                          final customText = customTexts.firstWhere(
+                            (ct) => ct['id'] == id,
+                            orElse: () => {'text': ''},
+                          );
+                          label = 'Text: ${customText['text']}';
+                          icon = Icons.text_fields;
+                        } else if (component.startsWith('field_value_')) {
+                          final id = component.replaceFirst('field_value_', '');
+                          final fieldValue = fieldValues.firstWhere(
+                            (fv) => fv['id'] == id,
+                            orElse: () => {'field': null},
+                          );
+                          label = 'Field: ${fieldValue['field'] ?? "None"}';
+                          icon = Icons.table_chart;
+                        } else {
+                          switch (component) {
+                            case 'date':
+                              label = 'Date: ${dateFormatController.text}';
+                              icon = Icons.calendar_today;
+                              break;
+                            case 'time':
+                              label = 'Time: ${timeFormatController.text}';
+                              icon = Icons.access_time;
+                              break;
+                            case 'number':
+                              label = 'Number: ${startNumber.toString().padLeft(numberPadding, '0')}';
+                              icon = Icons.format_list_numbered;
+                              break;
+                            default:
+                              label = component;
+                              icon = Icons.help_outline;
+                          }
+                        }
+                        return ListTile(
+                          key: ValueKey(component),
+                          leading: Icon(icon),
+                          title: Text(label),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete),
+                            onPressed: () {
+                              if (component.startsWith('custom_text_')) {
+                                _removeCustomText(component.replaceFirst('custom_text_', ''));
+                              } else if (component.startsWith('field_value_')) {
+                                _removeFieldValue(component.replaceFirst('field_value_', ''));
+                              } else {
+                                setState(() {
+                                  componentOrder.remove(component);
+                                });
+                              }
+                            },
+                          ),
+                        );
+                      }).toList(),
+                      onReorder: (oldIndex, newIndex) {
+                        setState(() {
+                          if (newIndex > oldIndex) {
+                            newIndex -= 1;
+                          }
+                          final item = componentOrder.removeAt(oldIndex);
+                          componentOrder.insert(newIndex, item);
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        ActionChip(
+                          avatar: const Icon(Icons.text_fields),
+                          label: const Text('Add Custom Text'),
+                          onPressed: _addCustomText,
+                        ),
+                        ActionChip(
+                          avatar: const Icon(Icons.table_chart),
+                          label: const Text('Add Field'),
+                          onPressed: _addFieldValue,
+                        ),
+                        if (!componentOrder.contains('date'))
+                          ActionChip(
+                            avatar: const Icon(Icons.calendar_today),
+                            label: const Text('Add Date'),
+                            onPressed: () {
+                              setState(() {
+                                componentOrder.add('date');
+                              });
+                            },
+                          ),
+                        if (!componentOrder.contains('time'))
+                          ActionChip(
+                            avatar: const Icon(Icons.access_time),
+                            label: const Text('Add Time'),
+                            onPressed: () {
+                              setState(() {
+                                componentOrder.add('time');
+                              });
+                            },
+                          ),
+                        if (!componentOrder.contains('number'))
+                          ActionChip(
+                            avatar: const Icon(Icons.format_list_numbered),
+                            label: const Text('Add Number'),
+                            onPressed: () {
+                              setState(() {
+                                componentOrder.add('number');
+                              });
+                            },
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Component Settings
+            ...customTexts.map((customText) {
+              final id = customText['id'];
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Custom Text',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete),
+                            onPressed: () => _removeCustomText(id),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: customTextControllers[id],
+                        decoration: const InputDecoration(
+                          labelText: 'Text',
+                          hintText: 'Enter text to include',
+                          prefixIcon: Icon(Icons.text_fields),
+                        ),
+                        onChanged: (value) {
+                          setState(() {
+                            customText['text'] = value;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+
+            ...fieldValues.map((fieldValue) {
+              final id = fieldValue['id'];
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Field Value',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete),
+                            onPressed: () => _removeFieldValue(id),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(
+                        value: fieldValue['field'],
+                        decoration: const InputDecoration(
+                          labelText: 'Select Field',
+                          prefixIcon: Icon(Icons.table_chart),
+                        ),
+                        items: [
+                          const DropdownMenuItem(
+                            value: null,
+                            child: Text('None'),
+                          ),
+                          ...dataColumns.map((column) {
+                            return DropdownMenuItem(
+                              value: column,
+                              child: Text(column),
+                            );
+                          }),
+                        ],
+                        onChanged: (value) {
+                          setState(() {
+                            fieldValue['field'] = value;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+
+            if (componentOrder.contains('date'))
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Checkbox(
+                            value: includeDate,
+                            onChanged: (value) {
+                              setState(() {
+                                includeDate = value ?? false;
+                              });
+                            },
+                          ),
+                          const Text(
+                            'Date Format',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (includeDate) ...[
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: dateFormatController,
+                          decoration: const InputDecoration(
+                            labelText: 'Format',
+                            hintText: 'yyyyMMdd',
+                            prefixIcon: Icon(Icons.calendar_today),
+                          ),
+                          onChanged: (value) {
+                            setState(() {
+                              dateFormat = value.isNotEmpty ? value : 'yyyyMMdd';
+                            });
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+
+            if (componentOrder.contains('time'))
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Checkbox(
+                            value: includeTime,
+                            onChanged: (value) {
+                              setState(() {
+                                includeTime = value ?? false;
+                              });
+                            },
+                          ),
+                          const Text(
+                            'Time Format',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (includeTime) ...[
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: timeFormatController,
+                          decoration: const InputDecoration(
+                            labelText: 'Format',
+                            hintText: 'HHmmss',
+                            prefixIcon: Icon(Icons.access_time),
+                          ),
+                          onChanged: (value) {
+                            setState(() {
+                              timeFormat = value.isNotEmpty ? value : 'HHmmss';
+                            });
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+
+            if (componentOrder.contains('number'))
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Checkbox(
+                            value: useIncrementingNumber,
+                            onChanged: (value) {
+                              setState(() {
+                                useIncrementingNumber = value ?? false;
+                              });
+                            },
+                          ),
+                          const Text(
+                            'Number Settings',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (useIncrementingNumber) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: startNumberController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Start Number',
+                                  prefixIcon: Icon(Icons.format_list_numbered),
+                                ),
+                                keyboardType: TextInputType.number,
+                                onChanged: (value) {
+                                  setState(() {
+                                    startNumber = int.tryParse(value) ?? 1;
+                                  });
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                controller: numberPaddingController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Number Padding',
+                                  prefixIcon: Icon(Icons.format_size),
+                                ),
+                                keyboardType: TextInputType.number,
+                                onChanged: (value) {
+                                  setState(() {
+                                    numberPadding = int.tryParse(value) ?? 3;
+                                  });
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+
+            const SizedBox(height: 16),
+
+            // Separator options
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: useCustomSeparator,
+                          onChanged: (value) {
+                            setState(() {
+                              useCustomSeparator = value ?? false;
+                            });
+                          },
+                        ),
+                        const Text(
+                          'Separator',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (useCustomSeparator) ...[
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: customSeparatorController,
+                        decoration: const InputDecoration(
+                          labelText: 'Custom Separator',
+                          hintText: 'Character to separate parts',
+                          prefixIcon: Icon(Icons.segment),
+                        ),
+                        onChanged: (value) {
+                          setState(() {
+                            customSeparator = value.isNotEmpty ? value : '_';
+                          });
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Preview
+            Card(
+              color: Theme.of(context).colorScheme.surfaceVariant,
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Preview:',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _generateFileName(0, dataRows.isNotEmpty ? dataRows[0] : {}),
+                      style: const TextStyle(
+                        fontStyle: FontStyle.italic,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _generateFiles() async {
@@ -414,6 +1191,8 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
     setState(() {
       isGenerating = true;
       generationError = null;
+      currentProgress = 0;
+      totalFiles = dataRows.length;
     });
 
     try {
@@ -527,9 +1306,9 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
           }
         }
         
-        // Generate output filename
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        final outputPath = '$outputDir/document_${i + 1}_$timestamp.docx';
+        // Generate filename using the naming pattern
+        final fileName = _generateFileName(i, row);
+        final outputPath = '$outputDir/$fileName.docx';
         
         // Save the modified document
         final outputBytes = ZipEncoder().encode(newArchive);
@@ -537,6 +1316,10 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
           await File(outputPath).writeAsBytes(outputBytes);
           print('Generated file: $outputPath');
         }
+
+        setState(() {
+          currentProgress = i + 1;
+        });
       }
       
       setState(() {
@@ -557,330 +1340,6 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
         SnackBar(content: Text('Error generating files: $e')),
       );
     }
-  }
-
-  void _showPatternDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Select Field Pattern'),
-        content: DropdownButtonFormField<String>(
-          value: pattern,
-          items: patternMap.entries.map((entry) {
-            return DropdownMenuItem(
-              value: entry.key,
-              child: Text(entry.value),
-            );
-          }).toList(),
-          onChanged: (value) async {
-            if (value != null && value != pattern) {
-              Navigator.pop(context);
-              
-              // Update pattern
-              setState(() {
-                pattern = value;
-              });
-              
-              // Clear existing fields and mappings
-              templateFields.clear();
-              fieldMappings.clear();
-              
-              // Re-extract fields with new pattern
-              await _extractTemplateFields();
-              
-              // Re-run auto-mapping if we have data
-              if (dataColumns.isNotEmpty) {
-                _autoMapFields();
-              }
-            }
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showOutputSettingsDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Output File Settings'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('File Name Components:'),
-                CheckboxListTile(
-                  title: const Text('Include Date'),
-                  value: includeDate,
-                  onChanged: (value) {
-                    setState(() {
-                      includeDate = value ?? false;
-                    });
-                  },
-                ),
-                if (includeDate)
-                  TextField(
-                    controller: dateFormatController,
-                    decoration: const InputDecoration(
-                      labelText: 'Date Format',
-                      hintText: 'yyyyMMdd',
-                    ),
-                  ),
-                CheckboxListTile(
-                  title: const Text('Include Time'),
-                  value: includeTime,
-                  onChanged: (value) {
-                    setState(() {
-                      includeTime = value ?? false;
-                    });
-                  },
-                ),
-                TextField(
-                  controller: customTextController,
-                  decoration: const InputDecoration(
-                    labelText: 'Custom Text',
-                    hintText: 'Enter custom text for filename',
-                  ),
-                  onChanged: (value) {
-                    setState(() {
-                      customText = value;
-                    });
-                  },
-                ),
-                const SizedBox(height: 8),
-                const Text('Select Field from Data:'),
-                DropdownButton<String>(
-                  value: selectedField,
-                  isExpanded: true,
-                  hint: const Text('Select a field'),
-                  items: dataColumns.map((column) {
-                    return DropdownMenuItem(
-                      value: column,
-                      child: Text(column),
-                    );
-                  }).toList(),
-                  onChanged: (value) {
-                    setState(() {
-                      selectedField = value;
-                    });
-                  },
-                ),
-                const SizedBox(height: 8),
-                CheckboxListTile(
-                  title: const Text('Use Incrementing Number'),
-                  value: useIncrementingNumber,
-                  onChanged: (value) {
-                    setState(() {
-                      useIncrementingNumber = value ?? false;
-                    });
-                  },
-                ),
-                if (useIncrementingNumber) ...[
-                  TextField(
-                    controller: numberSeparatorController,
-                    decoration: const InputDecoration(
-                      labelText: 'Number Separator',
-                      hintText: '-',
-                    ),
-                    onChanged: (value) {
-                      setState(() {
-                        numberSeparator = value;
-                      });
-                    },
-                  ),
-                  TextField(
-                    controller: startNumberController,
-                    decoration: const InputDecoration(
-                      labelText: 'Start Number',
-                      hintText: '1',
-                    ),
-                    keyboardType: TextInputType.number,
-                    onChanged: (value) {
-                      setState(() {
-                        startNumber = int.tryParse(value) ?? 1;
-                      });
-                    },
-                  ),
-                  TextField(
-                    controller: numberPaddingController,
-                    decoration: const InputDecoration(
-                      labelText: 'Number Padding',
-                      hintText: '3',
-                    ),
-                    keyboardType: TextInputType.number,
-                    onChanged: (value) {
-                      setState(() {
-                        numberPadding = int.tryParse(value) ?? 3;
-                      });
-                    },
-                  ),
-                ],
-                const SizedBox(height: 16),
-                const Text('Preview:'),
-                const SizedBox(height: 8),
-                Text(
-                  _generateFileName(0, dataRows.isNotEmpty ? dataRows[0] : {}),
-                  style: const TextStyle(fontStyle: FontStyle.italic),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () {
-                this.setState(() {
-                  // Update all the state variables
-                  includeDate = includeDate;
-                  includeTime = includeTime;
-                  customText = customTextController.text;
-                  selectedField = selectedField;
-                  useIncrementingNumber = useIncrementingNumber;
-                  numberSeparator = numberSeparatorController.text;
-                  startNumber = int.tryParse(startNumberController.text) ?? 1;
-                  numberPadding = int.tryParse(numberPaddingController.text) ?? 3;
-                });
-                Navigator.pop(context);
-              },
-              child: const Text('Apply'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFieldMappingSection() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Field Mapping',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: _showPatternDialog,
-                      icon: const Icon(Icons.settings),
-                      label: Text('Pattern: ${patternMap[pattern]}'),
-                    ),
-                    const SizedBox(width: 8),
-                    TextButton.icon(
-                      onPressed: _autoMapFields,
-                      icon: const Icon(Icons.auto_fix_high),
-                      label: const Text('Auto Map'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (templateFields.isEmpty)
-              const Center(
-                child: Text('No template fields detected'),
-              )
-            else
-              ListView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: templateFields.length,
-                itemBuilder: (context, index) {
-                  final field = templateFields[index];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8.0),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(field),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: DropdownButton<String>(
-                            value: fieldMappings[field] ?? '',
-                            isExpanded: true,
-                            items: [
-                              const DropdownMenuItem(
-                                value: '',
-                                child: Text('Select a column'),
-                              ),
-                              ...dataColumns.map((column) => DropdownMenuItem(
-                                value: column,
-                                child: Text(column),
-                              )),
-                            ],
-                            onChanged: (value) {
-                              setState(() {
-                                fieldMappings[field] = value ?? '';
-                              });
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOutputSettingsSection() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Output Settings',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: _showOutputSettingsDialog,
-                  icon: const Icon(Icons.settings),
-                  label: const Text('Configure'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const Icon(Icons.folder),
-              title: const Text('Output Directory'),
-              subtitle: Text(outputDirectory ?? 'Not selected'),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _buildGenerationProgress() {
@@ -912,107 +1371,6 @@ class _DataMappingScreenState extends State<DataMappingScreen> {
                 style: const TextStyle(color: Colors.red),
               ),
             ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Data Mapping'),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Data File',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    if (dataPath == null)
-                      ElevatedButton.icon(
-                        onPressed: _pickDataFile,
-                        icon: const Icon(Icons.upload_file),
-                        label: const Text('Select Data File (Excel/CSV)'),
-                      )
-                    else
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          ListTile(
-                            leading: const Icon(Icons.table_chart),
-                            title: Text(path.basename(dataPath!)),
-                            subtitle: Text(dataPath!),
-                          ),
-                          const SizedBox(height: 8),
-                          ElevatedButton.icon(
-                            onPressed: _pickDataFile,
-                            icon: const Icon(Icons.edit),
-                            label: const Text('Change Data File'),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            _buildFieldMappingSection(),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Output Settings',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        TextButton.icon(
-                          onPressed: _selectOutputDirectory,
-                          icon: const Icon(Icons.folder),
-                          label: const Text('Change Directory'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    ListTile(
-                      leading: const Icon(Icons.folder),
-                      title: const Text('Output Directory'),
-                      subtitle: Text(outputDirectory ?? 'Not selected'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            _buildGenerationProgress(),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: isGenerating ? null : _generateFiles,
-              child: Text(isGenerating ? 'Generating...' : 'Generate Files'),
-            ),
           ],
         ),
       ),
