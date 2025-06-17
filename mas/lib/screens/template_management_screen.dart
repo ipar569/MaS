@@ -13,99 +13,68 @@ class TemplateManagementScreen extends StatefulWidget {
 }
 
 class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
-  List<FileSystemEntity> templates = [];
+  String? templatePath;
+  String? templateName;
   bool isLoading = false;
+  String pattern = '<<>>'; // Set default to <<>>
+  final Map<String, String> patternMap = {
+    '<<>>': 'Double Angle Brackets (<< >>)',
+    '{{}}': 'Double Curly Braces ({{ }})',
+    '[]': 'Square Brackets ([ ])',
+    '()': 'Parentheses (( ))',
+  };
 
-  @override
-  void initState() {
-    super.initState();
-    _loadTemplates();
-  }
-
-  Future<void> _loadTemplates() async {
-    setState(() => isLoading = true);
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final templatesDir = Directory('${directory.path}/templates');
-      if (!await templatesDir.exists()) {
-        await templatesDir.create(recursive: true);
-      }
-      final files = await templatesDir.list().toList();
-      setState(() {
-        templates = files.where((file) {
-          final extension = path.extension(file.path).toLowerCase();
-          return extension == '.docx' || extension == '.pdf';
-        }).toList();
-      });
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading templates: $e')),
-      );
-    } finally {
-      setState(() => isLoading = false);
+  String _getExample(String pattern) {
+    switch (pattern) {
+      case '<<>>':
+        return '<<field>>';
+      case '{{}}':
+        return '{{field}}';
+      case '[]':
+        return '[field]';
+      case '()':
+        return '(field)';
+      default:
+        return '<<field>>';
     }
   }
 
-  Future<void> _uploadTemplate() async {
+  Future<void> _pickTemplate() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['docx', 'pdf'],
+        allowedExtensions: ['docx'],
       );
 
-      if (result != null) {
-        final file = result.files.first;
-        final directory = await getApplicationDocumentsDirectory();
-        final templatesDir = Directory('${directory.path}/templates');
-        if (!await templatesDir.exists()) {
-          await templatesDir.create(recursive: true);
-        }
-
-        final newPath = '${templatesDir.path}/${file.name}';
-        final newFile = File(newPath);
-        await newFile.writeAsBytes(await File(file.path!).readAsBytes());
-
-        await _loadTemplates();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Template uploaded successfully')),
-          );
-        }
+      if (result != null && result.files.first.path != null) {
+        setState(() {
+          templatePath = result.files.first.path;
+          templateName = path.basename(result.files.first.path!);
+        });
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error uploading template: $e')),
+          SnackBar(content: Text('Error picking template: $e')),
         );
       }
     }
   }
 
-  Future<void> _deleteTemplate(FileSystemEntity file) async {
-    try {
-      await file.delete();
-      await _loadTemplates();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Template deleted successfully')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error deleting template: $e')),
-        );
-      }
+  void _navigateToDataMapping() {
+    if (templatePath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a template first')),
+      );
+      return;
     }
-  }
 
-  void _navigateToDataMapping(FileSystemEntity file) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => DataMappingScreen(
-          templatePath: file.path,
-          templateName: path.basename(file.path),
+          templatePath: templatePath!,
+          initialPattern: pattern, // This will now always have a value
         ),
       ),
     );
@@ -114,7 +83,7 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Template Management'),
@@ -124,124 +93,125 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Templates',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: colorScheme.onBackground,
-                  ),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Template Selection',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: TextEditingController(text: templateName),
+                            readOnly: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Selected Template',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _pickTemplate,
+                          icon: const Icon(Icons.upload_file),
+                          label: const Text('Select Template'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: pattern,
+                            decoration: const InputDecoration(
+                              labelText: 'Field Pattern',
+                              border: OutlineInputBorder(),
+                              helperText: 'Select the pattern used in your template',
+                            ),
+                            items: patternMap.entries.map((entry) {
+                              return DropdownMenuItem(
+                                value: entry.key,
+                                child: Text(entry.value),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                setState(() {
+                                  pattern = value;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _navigateToDataMapping,
+                          icon: const Icon(Icons.data_array),
+                          label: const Text('Map Data to Template'),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                ElevatedButton.icon(
-                  onPressed: _uploadTemplate,
-                  icon: const Icon(Icons.upload_file),
-                  label: const Text('Upload Template'),
-                ),
-              ],
+              ),
             ),
             const SizedBox(height: 16),
-            Expanded(
-              child: isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : Card(
-                      child: templates.isEmpty
-                          ? Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.description_outlined,
-                                    size: 64,
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    'No templates uploaded yet',
-                                    style: TextStyle(
-                                      color: colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'Upload a Word or PDF document to get started',
-                                    style: TextStyle(
-                                      color: colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : ListView.builder(
-                              itemCount: templates.length,
-                              itemBuilder: (context, index) {
-                                final file = templates[index];
-                                final fileName = path.basename(file.path);
-                                final fileExtension = path.extension(file.path).toLowerCase();
-                                
-                                return ListTile(
-                                  leading: Icon(
-                                    fileExtension == '.pdf'
-                                        ? Icons.picture_as_pdf
-                                        : Icons.description,
-                                    color: colorScheme.primary,
-                                  ),
-                                  title: Text(
-                                    fileName,
-                                    style: TextStyle(color: colorScheme.onSurface),
-                                  ),
-                                  subtitle: Text(
-                                    'Last modified: ${File(file.path).lastModifiedSync()}',
-                                    style: TextStyle(color: colorScheme.onSurfaceVariant),
-                                  ),
-                                  onTap: () => _navigateToDataMapping(file),
-                                  trailing: PopupMenuButton(
-                                    itemBuilder: (context) => [
-                                      const PopupMenuItem(
-                                        value: 'generate',
-                                        child: Text('Generate Files'),
-                                      ),
-                                      const PopupMenuItem(
-                                        value: 'delete',
-                                        child: Text('Delete'),
-                                      ),
-                                    ],
-                                    onSelected: (value) async {
-                                      if (value == 'generate') {
-                                        _navigateToDataMapping(file);
-                                      } else if (value == 'delete') {
-                                        final confirmed = await showDialog<bool>(
-                                          context: context,
-                                          builder: (context) => AlertDialog(
-                                            title: const Text('Delete Template'),
-                                            content: Text(
-                                                'Are you sure you want to delete "$fileName"?'),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(context, false),
-                                                child: const Text('Cancel'),
-                                              ),
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(context, true),
-                                                child: const Text('Delete'),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                        if (confirmed == true) {
-                                          await _deleteTemplate(file);
-                                        }
-                                      }
-                                    },
-                                  ),
-                                );
-                              },
-                            ),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Field Pattern',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.primary,
+                      ),
                     ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Choose how fields are marked in your template:',
+                      style: TextStyle(
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: pattern,
+                      decoration: InputDecoration(
+                        border: const OutlineInputBorder(),
+                        labelText: 'Select Pattern',
+                        helperText: 'Example: ${_getExample(pattern)}',
+                      ),
+                      items: patternMap.entries.map((entry) {
+                        return DropdownMenuItem(
+                          value: entry.key,
+                          child: Text('${entry.value} (Example: ${_getExample(entry.key)})'),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            pattern = value;
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
